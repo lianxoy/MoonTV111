@@ -38,6 +38,9 @@ export async function POST(request: NextRequest) {
       DoubanImageProxyType,
       DoubanImageProxy,
       DisableYellowFilter,
+      DanmakuApiBaseUrl,
+      TVBoxEnabled,
+      TVBoxPassword,
     } = body as {
       SiteName: string;
       Announcement: string;
@@ -48,6 +51,9 @@ export async function POST(request: NextRequest) {
       DoubanImageProxyType: string;
       DoubanImageProxy: string;
       DisableYellowFilter: boolean;
+      DanmakuApiBaseUrl?: string;
+      TVBoxEnabled?: boolean;
+      TVBoxPassword?: string;
     };
 
     // 参数校验
@@ -60,7 +66,11 @@ export async function POST(request: NextRequest) {
       typeof DoubanProxy !== 'string' ||
       typeof DoubanImageProxyType !== 'string' ||
       typeof DoubanImageProxy !== 'string' ||
-      typeof DisableYellowFilter !== 'boolean'
+      typeof DisableYellowFilter !== 'boolean' ||
+      (DanmakuApiBaseUrl !== undefined &&
+        typeof DanmakuApiBaseUrl !== 'string') ||
+      (TVBoxEnabled !== undefined && typeof TVBoxEnabled !== 'boolean') ||
+      (TVBoxPassword !== undefined && typeof TVBoxPassword !== 'string')
     ) {
       return NextResponse.json({ error: '参数格式错误' }, { status: 400 });
     }
@@ -90,7 +100,19 @@ export async function POST(request: NextRequest) {
       DoubanImageProxyType,
       DoubanImageProxy,
       DisableYellowFilter,
+      DanmakuApiBaseUrl,
+      TVBoxEnabled,
+      TVBoxPassword,
     };
+
+    // 同步更新 ConfigFile 中的 cache_time
+    try {
+      const configFileData = JSON.parse(adminConfig.ConfigFile);
+      configFileData.cache_time = SiteInterfaceCacheTime;
+      adminConfig.ConfigFile = JSON.stringify(configFileData);
+    } catch (e) {
+      console.error('更新 ConfigFile 中的 cache_time 失败:', e);
+    }
 
     // 写入数据库
     if (storage && typeof (storage as any).setAdminConfig === 'function') {

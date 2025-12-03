@@ -2,9 +2,8 @@
 'use client';
 
 import { ChevronUp, Search, X } from 'lucide-react';
-import { useRouter, useSearchParams } from 'next/navigation';
-import { Suspense, useMemo } from 'react';
-import { useEffect,useRef, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   addSearchHistory,
@@ -28,7 +27,6 @@ function SearchPageClient() {
   const [searchHistory, setSearchHistory] = useState<string[]>([]);
   const [showBackToTop, setShowBackToTop] = useState(false);
 
-  const router = useRouter();
   const searchParams = useSearchParams();
   const [searchQuery, setSearchQuery] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -39,6 +37,14 @@ function SearchPageClient() {
   const [selectedHistoryItem, setSelectedHistoryItem] = useState<string | null>(null);
   const historyRef = useRef<HTMLDivElement>(null);
   const [hasResetOnEmptyParams, setHasResetOnEmptyParams] = useState(true);
+  
+  // 分页加载相关状态
+  const [displayedExactCount, setDisplayedExactCount] = useState(20); // 初始显示20个精确匹配结果
+  const [displayedOthersCount, setDisplayedOthersCount] = useState(20); // 初始显示20个其他结果
+  const loadingMoreExactRef = useRef<HTMLDivElement>(null);
+  const loadingMoreOthersRef = useRef<HTMLDivElement>(null);
+  const observerExactRef = useRef<IntersectionObserver | null>(null);
+  const observerOthersRef = useRef<IntersectionObserver | null>(null);
 
   // 筛选状态 - 从 URL 参数初始化，如果没有URL参数则从保存的源读取
   const [searchSources, setSearchSources] = useState<string[]>(() => {
@@ -222,6 +228,18 @@ const sortedAggregatedResults: { exact: [string, SearchResult[]][], others: [str
   return { exact, others };
 }, [filteredAggregatedResults, searchResults, sortField, sortOrder, searchQuery, viewMode]);
 
+  // 分页显示的结果
+  const displayedExactResults = useMemo(() => {
+    return sortedAggregatedResults.exact.slice(0, displayedExactCount);
+  }, [sortedAggregatedResults.exact, displayedExactCount]);
+
+  const displayedOthersResults = useMemo(() => {
+    return sortedAggregatedResults.others.slice(0, displayedOthersCount);
+  }, [sortedAggregatedResults.others, displayedOthersCount]);
+
+  const hasMoreExact = sortedAggregatedResults.exact.length > displayedExactCount;
+  const hasMoreOthers = sortedAggregatedResults.others.length > displayedOthersCount;
+
 
 
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -238,7 +256,7 @@ const sortedAggregatedResults: { exact: [string, SearchResult[]][], others: [str
       setShowResults(true);
 
       const params = new URLSearchParams({ q: query.trim() });
-      if (!streamEnabled) params.set('stream', '0');
+      params.set('stream', streamEnabled ? '1' : '0');
       
       // 添加选中的搜索源到请求参数
       if (searchSources.length > 0) {
@@ -255,7 +273,7 @@ const sortedAggregatedResults: { exact: [string, SearchResult[]][], others: [str
 
       if (!streamEnabled) {
         const json = await response.json();
-        setSearchResults(json.aggregatedResults || []);
+        setSearchResults(json.results || []);
         setFailedSources(json.failedSources || []);
         setIsLoading(false);
       } else {
@@ -313,21 +331,8 @@ const sortedAggregatedResults: { exact: [string, SearchResult[]][], others: [str
     }
   };
 
-  // 搜索历史、滚动监听和自动搜索处理
+  // 初始化：搜索历史、滚动监听
   useEffect(() => {
-    // 检查URL中是否有搜索查询参数
-    const urlQuery = searchParams.get('q');
-    if (urlQuery) {
-      // 触发搜索
-      setSearchQuery(urlQuery);
-      setIsLoading(true);
-      setShowResults(true);
-      fetchSearchResults(urlQuery);
-      addSearchHistory(urlQuery);
-    } else {
-      document.getElementById('searchInput')?.focus();
-    }
-    
     getSearchHistory().then(setSearchHistory);
     const unsubscribe = subscribeToDataUpdates('searchHistoryUpdated', setSearchHistory);
     const handleScroll = () => {
@@ -339,6 +344,107 @@ const sortedAggregatedResults: { exact: [string, SearchResult[]][], others: [str
       document.body.removeEventListener('scroll', handleScroll);
     };
   }, []);
+
+  // 设置滚动监听，实现分页加载 - 精确匹配结果
+  useEffect(() => {
+    if (!loadingMoreExactRef.current || isLoading || !hasMoreExact) {
+      return;
+    }
+
+    // 清理旧的观察者
+    if (observerExactRef.current) {
+      observerExactRef.current.disconnect();
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && hasMoreExact) {
+          setDisplayedExactCount((prev) => prev + 20);
+        }
+      },
+      { 
+        threshold: 0.1,
+        rootMargin: '200px' // 提前200px开始加载，提供更流畅的体验
+      }
+    );
+
+    observer.observe(loadingMoreExactRef.current);
+    observerExactRef.current = observer;
+
+    return () => {
+      if (observerExactRef.current) {
+        observerExactRef.current.disconnect();
+      }
+    };
+  }, [hasMoreExact, isLoading]);
+
+  // 设置滚动监听，实现分页加载 - 其他结果
+  useEffect(() => {
+    if (!loadingMoreOthersRef.current || isLoading || !hasMoreOthers || hasMoreExact) {
+      // 如果还有精确匹配结果未加载完，不监听其他结果
+      return;
+    }
+
+    // 清理旧的观察者
+    if (observerOthersRef.current) {
+      observerOthersRef.current.disconnect();
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && hasMoreOthers && !hasMoreExact) {
+          setDisplayedOthersCount((prev) => prev + 20);
+        }
+      },
+      { 
+        threshold: 0.1,
+        rootMargin: '200px' // 提前200px开始加载，提供更流畅的体验
+      }
+    );
+
+    observer.observe(loadingMoreOthersRef.current);
+    observerOthersRef.current = observer;
+
+    return () => {
+      if (observerOthersRef.current) {
+        observerOthersRef.current.disconnect();
+      }
+    };
+  }, [hasMoreExact, hasMoreOthers, isLoading]);
+
+  // 提取当前的查询参数 q 和 sources
+  const currentQuery = useMemo(() => searchParams.get('q'), [searchParams]);
+  const currentSources = useMemo(() => searchParams.get('sources'), [searchParams]);
+
+  // 监听查询变化时重置分页
+  useEffect(() => {
+    if (currentQuery) {
+      setDisplayedExactCount(20);
+      setDisplayedOthersCount(20);
+    }
+  }, [currentQuery]);
+
+  // 同步搜索源配置（当 sources 参数变化时）
+  useEffect(() => {
+    if (currentSources) {
+      setSearchSources(currentSources.split(','));
+    }
+  }, [currentSources]);
+
+  // 监听查询参数 q 的变化并触发搜索（只在 q 变化时触发）
+  useEffect(() => {
+    if (currentQuery) {
+      // 触发搜索
+      setSearchQuery(currentQuery);
+      setIsLoading(true);
+      setShowResults(true);
+      fetchSearchResults(currentQuery);
+      addSearchHistory(currentQuery);
+    } else {
+      // 没有搜索参数时，聚焦输入框
+      document.getElementById('searchInput')?.focus();
+    }
+  }, [currentQuery]); // 只依赖查询参数 q，仅在 q 变化时触发
 
   // 监听URL参数变化，当URL变为无参数时重新挂载组件（只执行一次）
   useEffect(() => {
@@ -426,13 +532,8 @@ const sortedAggregatedResults: { exact: [string, SearchResult[]][], others: [str
     const trimmed = (query ?? searchQuery).trim().replace(/\s+/g, ' ');
     if (!trimmed) return;
   
-    setSearchQuery(trimmed);
-    setIsLoading(true);
-    setShowResults(true);
     setShowSuggestions(false);
-    fetchSearchResults(trimmed);
-    addSearchHistory(trimmed);
-    // 更新URL包含选中的搜索源和超时时间
+    // 更新URL，由useEffect监听触发搜索
     const urlParams = new URLSearchParams();
     urlParams.set('q', trimmed);
     if (searchSources.length > 0) {
@@ -445,13 +546,8 @@ const sortedAggregatedResults: { exact: [string, SearchResult[]][], others: [str
   };
 
   const handleSuggestionSelect = (suggestion: string) => {
-    setSearchQuery(suggestion);
     setShowSuggestions(false);
-    setIsLoading(true);
-    setShowResults(true);
-    fetchSearchResults(suggestion);
-    addSearchHistory(suggestion);
-    // 更新URL包含选中的搜索源和超时时间
+    // 更新URL，由useEffect监听触发搜索
     const urlParams = new URLSearchParams();
     urlParams.set('q', suggestion);
     if (searchSources.length > 0) {
@@ -484,8 +580,8 @@ const sortedAggregatedResults: { exact: [string, SearchResult[]][], others: [str
   return (
     <PageLayout activePath="/search">
       <div className="px-4 sm:px-10 py-4 sm:py-8 overflow-visible mb-10">
-        {/* 搜索框和搜索源选择器 - 作为一个整体 */}
-        <div className="mb-7 max-w-2xl mx-auto">
+        {/* 移动端搜索框和搜索源选择器 */}
+        <div className="mb-7 max-w-2xl mx-auto md:hidden">
           <div className="flex items-center">
             {/* 搜索源选择器 - 在搜索框左侧，作为一个整体 */}
             <div className="flex-shrink-0">
@@ -595,7 +691,7 @@ const sortedAggregatedResults: { exact: [string, SearchResult[]][], others: [str
               key={`search-results-${viewMode}`}
               className="justify-start grid grid-cols-3 gap-x-2 gap-y-14 sm:gap-y-20 px-0 sm:px-2 sm:grid-cols-[repeat(auto-fill,_minmax(11rem,_1fr))] sm:gap-x-8"
             >
-              {sortedAggregatedResults.exact.map(([mapKey, group], index) => {
+              {displayedExactResults.map(([mapKey, group], index) => {
                 if (viewMode) {
                   return (
                     <div key={`agg-${mapKey}-${index}`} className="w-full">
@@ -633,6 +729,19 @@ const sortedAggregatedResults: { exact: [string, SearchResult[]][], others: [str
                   未找到相关结果
                 </div>
               )}
+              
+              {/* 加载更多指示器 - 精确匹配结果 */}
+              {hasMoreExact && (
+                <div
+                  ref={loadingMoreExactRef}
+                  className="col-span-full flex justify-center py-8"
+                >
+                  <div className="flex items-center gap-2 text-gray-500 dark:text-gray-400">
+                    <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-green-500"></div>
+                    <span className="text-sm">加载中...</span>
+                  </div>
+                </div>
+              )}
             </div>
           
             {/* 更多结果 */}
@@ -640,7 +749,7 @@ const sortedAggregatedResults: { exact: [string, SearchResult[]][], others: [str
               <div className="mt-8">
                 <h2 className="text-xl font-bold text-gray-800 dark:text-gray-200 mb-7">更多结果</h2>
                 <div className="justify-start grid grid-cols-3 gap-x-2 gap-y-14 sm:gap-y-20 px-0 sm:px-2 sm:grid-cols-[repeat(auto-fill,_minmax(11rem,_1fr))] sm:gap-x-8">
-                  {sortedAggregatedResults.others.map(([mapKey, group], index) => {
+                  {displayedOthersResults.map(([mapKey, group], index) => {
                     if (viewMode) {
                       return (
                         <div key={`agg-others-${mapKey}-${index}`} className="w-full">
@@ -672,6 +781,19 @@ const sortedAggregatedResults: { exact: [string, SearchResult[]][], others: [str
                       );
                     }
                   })}
+                  
+                  {/* 加载更多指示器 - 其他结果 */}
+                  {hasMoreOthers && !hasMoreExact && (
+                    <div
+                      ref={loadingMoreOthersRef}
+                      className="col-span-full flex justify-center py-8"
+                    >
+                      <div className="flex items-center gap-2 text-gray-500 dark:text-gray-400">
+                        <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-green-500"></div>
+                        <span className="text-sm">加载中...</span>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             )}

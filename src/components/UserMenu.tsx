@@ -13,13 +13,14 @@ import {
   User,
   X,
 } from 'lucide-react';
-import { useRouter } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
 import { checkForUpdates, CURRENT_VERSION, UpdateStatus } from '@/lib/version';
 
+import { useNavigationLoading } from './NavigationLoadingProvider';
 import { VersionPanel } from './VersionPanel';
 
 interface AuthInfo {
@@ -29,6 +30,8 @@ interface AuthInfo {
 
 export const UserMenu: React.FC = () => {
   const router = useRouter();
+  const pathname = usePathname();
+  const { startLoading } = useNavigationLoading();
   const [isOpen, setIsOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
@@ -47,8 +50,25 @@ export const UserMenu: React.FC = () => {
   const [doubanImageProxyType, setDoubanImageProxyType] = useState('direct');
   const [doubanImageProxyUrl, setDoubanImageProxyUrl] = useState('');
   const [isDoubanDropdownOpen, setIsDoubanDropdownOpen] = useState(false);
-  const [isDoubanImageProxyDropdownOpen, setIsDoubanImageProxyDropdownOpen] =
-    useState(false);
+  const [isDoubanImageProxyDropdownOpen, setIsDoubanImageProxyDropdownOpen] = useState(false);
+
+  const [autoDanmakuEnabled, setAutoDanmakuEnabled] = useState(false);
+  const [preferredDanmakuPlatform, setPreferredDanmakuPlatform] = useState("bilibili1");
+  const [isDanmakuPlatformDropdownOpen, setIsDanmakuPlatformDropdownOpen] = useState(false);
+
+  // 优选弹幕平台
+  const danmakuPlatformOptions = [
+    { value: "qiyi", label: "qiyi（爱奇艺）" },
+    { value: "bilibili1", label: "bilibili1（哔哩哔哩）" },
+    { value: "imgo", label: "imgo（芒果）" },
+    { value: "youku", label: "youku（优酷）" },
+    { value: "qq", label: "qq（腾讯）" },
+    { value: "renren", label: "renren（人人）" },
+    { value: "hanjutv", label: "hanjutv（韩剧TV）" },
+    { value: "bahamut", label: "bahamut（巴哈姆特）" },
+    { value: "dandan", label: "dandan（弹弹）" },
+  ];
+  
 
   // 豆瓣数据源选项
   const doubanDataSourceOptions = [
@@ -84,6 +104,31 @@ export const UserMenu: React.FC = () => {
   // 版本检查相关状态
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
   const [isChecking, setIsChecking] = useState(true);
+
+  // TVBox 设置
+  const [tvboxEnabled, setTvboxEnabled] = useState(false);
+  const [tvboxPassword, setTvboxPassword] = useState('');
+  const [tvboxUrl, setTvboxUrl] = useState('');
+  const isPrivileged = (authInfo?.role === 'owner' || authInfo?.role === 'admin');
+
+  const fetchTvboxConfig = async () => {
+    try {
+      const res = await fetch('/api/admin/tvbox', { cache: 'no-store' });
+      if (!res.ok) return;
+      const data = await res.json();
+      setTvboxEnabled(!!data.enabled);
+      setTvboxPassword(data.password || '');
+      setTvboxUrl(data.url || '');
+    } catch (err) {
+      console.warn('Failed to load TVBox admin config:', err);
+    }
+  };
+
+  useEffect(() => {
+    if (isSettingsOpen) {
+      fetchTvboxConfig();
+    }
+  }, [isSettingsOpen]);
 
   // 确保组件已挂载
   useEffect(() => {
@@ -164,6 +209,15 @@ export const UserMenu: React.FC = () => {
         setDoubanImageProxyUrl(defaultDoubanImageProxyUrl);
       }
 
+      const savedAutoDanmakuEnabled = localStorage.getItem('autoDanmakuEnabled');
+      if (savedAutoDanmakuEnabled !== null) {
+        setAutoDanmakuEnabled(JSON.parse(savedAutoDanmakuEnabled));
+      }
+
+      const savedPreferredPlatform = localStorage.getItem("preferredDanmakuPlatform");
+      if (savedPreferredPlatform) {
+        setPreferredDanmakuPlatform(savedPreferredPlatform);
+      }
 
     }
   }, []);
@@ -240,6 +294,12 @@ export const UserMenu: React.FC = () => {
   };
 
   const handleAdminPanel = () => {
+    // 如果已经在管理页面，直接关闭菜单，不触发加载动画
+    if (pathname === '/admin') {
+      setIsOpen(false);
+      return;
+    }
+    startLoading();
     router.push('/admin');
   };
 
@@ -312,6 +372,16 @@ export const UserMenu: React.FC = () => {
   };
 
   // 设置相关的处理函数
+  const handleAutoDanmakuToggle = (value: boolean) => {
+    setAutoDanmakuEnabled(value);
+    localStorage.setItem('autoDanmakuEnabled', JSON.stringify(value));
+  };
+  
+  const handlePreferredPlatformChange = (value: string) => {
+    setPreferredDanmakuPlatform(value);
+    localStorage.setItem("preferredDanmakuPlatform", value);
+  };
+
   const handleAggregateToggle = (value: boolean) => {
     setDefaultAggregateSearch(value);
     if (typeof window !== 'undefined') {
@@ -415,6 +485,9 @@ export const UserMenu: React.FC = () => {
       localStorage.setItem('doubanDataSource', defaultDoubanProxyType);
       localStorage.setItem('doubanImageProxyType', defaultDoubanImageProxyType);
       localStorage.setItem('doubanImageProxyUrl', defaultDoubanImageProxyUrl);
+      
+      localStorage.setItem('autoDanmakuEnabled', JSON.stringify(false));
+      localStorage.setItem('preferredDanmakuPlatform', 'bilibili1');
     }
   };
 
@@ -862,6 +935,173 @@ export const UserMenu: React.FC = () => {
                 <div className='absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform peer-checked:translate-x-5'></div>
               </div>
             </label>
+          </div>
+
+          {/* 自动匹配弹幕 */}
+          <div className='flex items-center justify-between'>
+            <div>
+              <h4 className='text-sm font-medium text-gray-700 dark:text-gray-300'>
+                自动匹配弹幕
+              </h4>
+              <p className='text-xs text-gray-500 dark:text-gray-400 mt-1'>
+                在进入播放页面时自动匹配并加载弹幕（推荐）
+              </p>
+            </div>
+            <label className='flex items-center cursor-pointer'>
+              <div className='relative'>
+                <input
+                  type='checkbox'
+                  className='sr-only peer'
+                  checked={autoDanmakuEnabled}
+                  onChange={(e) => handleAutoDanmakuToggle(e.target.checked)}
+                />
+                <div className='w-11 h-6 bg-gray-300 rounded-full peer-checked:bg-green-500 transition-colors dark:bg-gray-600'></div>
+                <div className='absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform peer-checked:translate-x-5'></div>
+              </div>
+            </label>
+          </div>
+
+          {/* 优选弹幕平台 */}
+          <div className='mt-3 relative'>
+            <h4 className='text-sm font-medium text-gray-700 dark:text-gray-300'>
+              优先弹幕平台
+            </h4>
+
+            {/* 自定义下拉选择框 */}
+            <button
+              type='button'
+              onClick={() => setIsDanmakuPlatformDropdownOpen(!isDanmakuPlatformDropdownOpen)}
+              className='w-full px-3 py-2.5 pr-10 border border-gray-300 dark:border-gray-600 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500 transition-all duration-200 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 shadow-sm hover:border-gray-400 dark:hover:border-gray-500 text-left mt-2'
+            >
+              {
+                danmakuPlatformOptions.find(
+                  (option) => option.value === preferredDanmakuPlatform
+                )?.label
+              }
+            </button>
+
+            {/* 下拉箭头 */}
+            <div className='absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none mt-2'>
+              <ChevronDown
+                className={`w-4 h-4 text-gray-400 dark:text-gray-500 transition-transform duration-200 ${
+                  isDanmakuPlatformDropdownOpen ? 'rotate-180' : ''
+                }`}
+              />
+            </div>
+
+            {/* 下拉选项列表 */}
+            {isDanmakuPlatformDropdownOpen && (
+              <div className='absolute z-50 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg shadow-lg max-h-60 overflow-auto'>
+                {danmakuPlatformOptions.map((option) => (
+                  <button
+                    key={option.value}
+                    type='button'
+                    onClick={() => {
+                      handlePreferredPlatformChange(option.value);
+                      setIsDanmakuPlatformDropdownOpen(false);
+                    }}
+                    className={`w-full px-3 py-2.5 text-left text-sm transition-colors duration-150 flex items-center justify-between hover:bg-gray-100 dark:hover:bg-gray-700 ${
+                      preferredDanmakuPlatform === option.value
+                        ? 'bg-green-50 dark:bg-green-900/20 text-green-600 dark:text-green-400'
+                        : 'text-gray-900 dark:text-gray-100'
+                    }`}
+                  >
+                    <span className='truncate'>{option.label}</span>
+                    {preferredDanmakuPlatform === option.value && (
+                      <Check className='w-4 h-4 text-green-600 dark:text-green-400 flex-shrink-0 ml-2' />
+                    )}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            <p className='text-xs text-gray-500 dark:text-gray-400 mt-1'>
+              自动匹配弹幕时优先使用此平台
+            </p>
+          </div>
+
+
+          {/* 分割线 */}
+          <div className='border-t border-gray-200 dark:border-gray-700'></div>
+
+          {/* TVBox 接口状态 */}
+          <div className='space-y-3'>
+            <h4 className='text-sm font-medium text-gray-700 dark:text-gray-300'>
+              TVBox 接口
+            </h4>
+            
+            {/* 状态和接口地址同行 */}
+            <div className='flex items-center gap-3'>
+              {/* 状态徽章 */}
+              <div className={`flex items-center gap-1.5 px-3 py-2 rounded-full text-xs font-medium shrink-0 ${
+                tvboxEnabled 
+                  ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400' 
+                  : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400'
+              }`}>
+                <div className={`w-2 h-2 rounded-full ${
+                  tvboxEnabled ? 'bg-green-500 animate-pulse' : 'bg-gray-400'
+                }`} />
+                <span>{tvboxEnabled ? '已开启' : '未开启'}</span>
+              </div>
+              
+              {/* 接口地址 */}
+              {tvboxEnabled && tvboxUrl ? (
+                <>
+                  <input
+                    ref={(input) => {
+                      if (input) {
+                        const url = new URL(tvboxUrl);
+                        url.searchParams.set('pwd', tvboxPassword || '');
+                        input.value = url.toString();
+                      }
+                    }}
+                    type='text'
+                    className='flex-1 min-w-0 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-gray-100'
+                    readOnly
+                  />
+                  <button
+                    type='button'
+                    className='shrink-0 px-3 py-2 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors'
+                    onClick={(e) => {
+                      const input = e.currentTarget.previousElementSibling as HTMLInputElement;
+                      navigator.clipboard.writeText(input.value);
+                    }}
+                  >
+                    复制
+                  </button>
+                </>
+              ) : (
+                !tvboxEnabled && (
+                  <span className='text-xs text-gray-500 dark:text-gray-400'>
+                    {storageType === 'localstorage' 
+                      ? '请修改环境变量 TVBOX_ENABLED 以开启' 
+                      : (isPrivileged ? '请前往管理面板的站点配置中开启' : '请联系管理员开启')
+                    }
+                  </span>
+                )
+              )}
+            </div>
+            
+            {/* 说明文字和提示 */}
+            {tvboxEnabled && tvboxUrl && (
+              <div className='space-y-2'>
+                <p className='text-xs text-gray-500 dark:text-gray-400'>
+                  将该地址填入 TVBox 的订阅/配置接口即可使用。
+                </p>
+                
+                {storageType === 'localstorage' && (
+                  <p className='text-xs text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20 px-3 py-2 rounded-lg'>
+                    💡 本地模式，开关由环境变量 TVBOX_ENABLED 控制，口令为 PASSWORD
+                  </p>
+                )}
+                
+                {isPrivileged && storageType !== 'localstorage' && (
+                  <p className='text-xs text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20 px-3 py-2 rounded-lg'>
+                    💡 如需修改 TVBox 配置（开关/密码），请前往管理面板的站点配置
+                  </p>
+                )}
+              </div>
+            )}
           </div>
 
           {/* 分割线 */}
